@@ -22,15 +22,19 @@
     </div>
 
     <!-- 倒数小浮窗 -->
+    <!-- Timer Overlay -->
     <div
       v-if="countdownVisible"
-      class="absolute top-24 right-8 bg-black/70 text-white px-6 py-4 rounded-xl shadow-lg border-2 border-yellow-500 whitespace-nowrap flex flex-col items-center justify-center pointer-events-none z-50 transition-opacity"
+      class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-50 flex flex-col items-center justify-center bg-black/50 px-8 py-4 rounded-xl border-2 border-white/20 shadow-2xl backdrop-blur-sm"
     >
-      <div class="text-sm mb-1 text-gray-300">
-        {{ turnUserId === userId ? '请您出牌' : '等待玩家出牌' }}
+      <div class="text-white text-lg mb-1 tracking-widest font-semibold opacity-80">
+        {{ isMyTurn ? '您的回合' : '等待其余玩家出牌...' }}
       </div>
-      <div class="text-4xl font-bold font-mono" :class="timeLeft <= 3 ? 'text-red-500 animate-[pulse_0.5s_infinite]' : 'text-yellow-400'">
-        {{ timeLeft }}s
+      <div
+        class="text-6xl font-black font-mono tracking-tighter transition-colors duration-300"
+        :class="timeLeft <= 3 ? 'text-red-500 animate-[pulse_0.5s_infinite]' : 'text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.8)]'"
+      >
+        {{ timeLeft }}
       </div>
     </div>
 
@@ -42,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, onUnmounted } from "vue";
 import { createApp } from "@/pixi/app";
 import { gameStore } from "@/stores/game";
 import { useSocket } from "@/hooks/useSocket";
@@ -59,8 +63,13 @@ const isReady = computed(() => readyList.value.includes(userId.value));
 const gameStart = ref(false);
 const countdownVisible = ref(false);
 const timeLeft = ref(0);
-const turnUserId = ref("");
+const isMyTurn = ref(false);
 let timerInterval: number | null = null;
+
+// Ensures cleanup
+onUnmounted(() => {
+  if (timerInterval) clearInterval(timerInterval);
+});
 
 const { connect, on, off, socketId, send } = useSocket();
 
@@ -116,7 +125,24 @@ onMounted(async () => {
       tableScene.resetRiver();
       tableScene.renderAllHands(hands, gameStore.myIndex, bankerIndex);
     });
+    on("startTimer", ({ turn, timeLimit }) => {
+      isMyTurn.value = turn === gameStore.myId;
+      timeLeft.value = timeLimit;
+      countdownVisible.value = true;
+
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = window.setInterval(() => {
+        timeLeft.value -= 1;
+        if (timeLeft.value <= 0) {
+          clearInterval(timerInterval);
+        }
+      }, 1000);
+    });
+
     on("played", ({ userId, card, nextTurn, hands: backendHands }) => {
+      countdownVisible.value = false;
+      if (timerInterval) clearInterval(timerInterval);
+
       console.log("played", userId, card, nextTurn);
       // 优先使用后端下发的完整 hands 作为权威数据源，避免前后端不同步
       if (backendHands) {
@@ -152,6 +178,9 @@ onMounted(async () => {
     });
 
     on("gameOver", ({ winner }) => {
+      countdownVisible.value = false;
+      if (timerInterval) clearInterval(timerInterval);
+
       console.log("gameOver", winner);
       // 游戏结束时隐藏出牌标记
       tableScene.hideTurnIndicator();
