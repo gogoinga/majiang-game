@@ -265,9 +265,110 @@ io.on("connection", (socket) => {
     const userId = [...room.players.entries()].find(
       ([sockId]) => sockId === socket.id
     )?.[1];
-    
+
     // 调用统一处理函数
     handlePlayCard(roomId, userId, card);
+  });
+
+  socket.on("claimAction", ({ action }) => { // action: 'peng', 'gang', or 'pass'
+    const roomId = [...socket.rooms].find(r => r !== socket.id);
+    if (!roomId) return;
+    const room = rooms.get(roomId);
+    const userId = [...room.players.entries()].find(([sid]) => sid === socket.id)?.[1];
+    const state = roomState.get(roomId);
+    if (!state || !state.actionPending) return;
+
+    // Ignore if user isn't prompted
+    if (!state.actionPending.options[userId]) return;
+
+    clearTimeout(state.actionPending.timerId);
+    const card = state.actionPending.card;
+    const fromUser = state.actionPending.fromUserId;
+
+    if (action === 'pass') {
+      // 简单处理：只要有人点过，就默认放弃抢牌，继续流程 (若有多人抢牌需更复杂投票逻辑，目前简化版)
+      state.actionPending = null;
+      proceedToNextTurn(roomId, fromUser);
+      return;
+    }
+
+    // Remove card from river of fromUser
+    const riverIdx = state.river[fromUser].lastIndexOf(card);
+    if (riverIdx !== -1) state.river[fromUser].splice(riverIdx, 1);
+
+    if (action === 'peng') {
+      // 扣除两张手牌
+      for(let i=0; i<2; i++) state.hands[userId].splice(state.hands[userId].indexOf(card), 1);
+      state.pengs[userId].push([card, card, card]);
+
+      state.actionPending = null;
+      state.turn = userId; // 拿牌者获得回合，不发牌
+
+      io.to(roomId).emit("peng", { userId, card, pengs: state.pengs, river: state.river });
+      startTimer(roomId);
+    }
+    else if (action === 'gang') {
+      // 扣除三张手牌
+      for(let i=0; i<3; i++) state.hands[userId].splice(state.hands[userId].indexOf(card), 1);
+      state.gangs[userId].push({ type: 'ming', card });
+
+      state.actionPending = null;
+      state.turn = userId; // 获得回合
+
+      io.to(roomId).emit("gang", { userId, card, gangs: state.gangs, river: state.river });
+
+      // 杠完必须多摸一张牌
+      if (state.wall.length === 0) {
+        io.to(roomId).emit("gameOver", { winner: null, nextBanker: state.banker });
+        room.ready.clear();
+        return;
+      }
+      const drawnTile = state.wall.pop();
+      state.hands[userId].push(drawnTile);
+      io.to(roomId).emit("draw", { userId, tile: drawnTile, wallLeft: state.wall.length, hands: state.hands });
+      startTimer(roomId);
+    }
+  });
+
+  socket.on("selfAction", ({ action, card }) => { // action: 'an_gang' or 'jia_gang'
+    const roomId = [...socket.rooms].find(r => r !== socket.id);
+    if (!roomId) return;
+    const room = rooms.get(roomId);
+    const userId = [...room.players.entries()].find(([sid]) => sid === socket.id)?.[1];
+    const state = roomState.get(roomId);
+    if (!state || state.turn !== userId) return;
+
+    if (action === 'an_gang') {
+      const count = state.hands[userId].filter(c => c === card).length;
+      if (count !== 4) return;
+      for(let i=0; i<4; i++) state.hands[userId].splice(state.hands[userId].indexOf(card), 1);
+      state.gangs[userId].push({ type: 'an', card });
+    }
+    else if (action === 'jia_gang') {
+      const inHandParams = state.hands[userId].filter(c => c === card).length;
+      const pengIndex = state.pengs[userId].findIndex(p => p[0] === card);
+      if (inHandParams < 1 || pengIndex === -1) return;
+
+      state.hands[userId].splice(state.hands[userId].indexOf(card), 1);
+      state.pengs[userId].splice(pengIndex, 1);
+      state.gangs[userId].push({ type: 'jia', card });
+    } else {
+      return;
+    }
+
+    io.to(roomId).emit("gang", { userId, card, getType: action, gangs: state.gangs, pengs: state.pengs });
+    stopTimer(roomId);
+
+    // 摸杠上花
+    if (state.wall.length === 0) {
+      io.to(roomId).emit("gameOver", { winner: null, nextBanker: state.banker });
+      room.ready.clear();
+      return;
+    }
+    const drawnTile = state.wall.pop();
+    state.hands[userId].push(drawnTile);
+    io.to(roomId).emit("draw", { userId, tile: drawnTile, wallLeft: state.wall.length, hands: state.hands });
+    startTimer(roomId);
   });
 
   // 新增：游戏结束事件
