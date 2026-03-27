@@ -27,12 +27,18 @@
       v-if="countdownVisible"
       class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-50 flex flex-col items-center justify-center bg-black/50 px-8 py-4 rounded-xl border-2 border-white/20 shadow-2xl backdrop-blur-sm"
     >
-      <div class="text-white text-lg mb-1 tracking-widest font-semibold opacity-80">
-        {{ isMyTurn ? '您的回合' : '等待其余玩家出牌...' }}
+      <div
+        class="text-white text-lg mb-1 tracking-widest font-semibold opacity-80"
+      >
+        {{ isMyTurn ? "您的回合" : "等待其余玩家出牌..." }}
       </div>
       <div
         class="text-6xl font-black font-mono tracking-tighter transition-colors duration-300"
-        :class="timeLeft <= 3 ? 'text-red-500 animate-[pulse_0.5s_infinite]' : 'text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.8)]'"
+        :class="
+          timeLeft <= 3
+            ? 'text-red-500 animate-[pulse_0.5s_infinite]'
+            : 'text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.8)]'
+        "
       >
         {{ timeLeft }}
       </div>
@@ -41,6 +47,21 @@
     <!-- 开局提示 -->
     <div v-if="gameStart" class="absolute inset-0 bg-black/50 flex-center">
       <span class="text-5xl text-white animate-pulse">牌局开始！</span>
+    </div>
+
+    <!-- Action Intercept Overlay -->
+    <div v-if="promptVisible" class="absolute bottom-32 left-1/2 transform -translate-x-1/2 z-50 flex gap-4">
+      <button v-if="promptOptions.includes('peng')" @click="selectClaimAction('peng')" class="px-6 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-full border-2 border-white shadow-xl text-xl">碰</button>
+      <button v-if="promptOptions.includes('gang')" @click="selectClaimAction('gang')" class="px-6 py-3 bg-purple-500 hover:bg-purple-400 text-white font-bold rounded-full border-2 border-white shadow-xl text-xl">杠</button>
+      <button @click="selectClaimAction('pass')" class="px-6 py-3 bg-gray-500 hover:bg-gray-400 text-white font-bold rounded-full border-2 border-white shadow-xl text-xl">过</button>
+    </div>
+
+    <!-- Self Action Overlay -->
+    <div v-if="selfOptions.length > 0 && isMyTurn" class="absolute bottom-32 left-1/4 transform -translate-x-1/2 z-50 flex gap-4">
+      <button v-for="opt in selfOptions" :key="opt.type+opt.card" @click="selectSelfAction(opt.type, opt.card)" class="px-6 py-3 bg-green-500 hover:bg-green-400 text-white font-bold rounded-full border-2 border-white shadow-xl text-xl">
+        {{ opt.type === 'an_gang' ? '暗杠' : '加杠' }}
+      </button>
+      <button @click="selfOptions = []" class="px-6 py-3 bg-gray-500 hover:bg-gray-400 text-white font-bold rounded-full border-2 border-white shadow-xl text-xl">暂不</button>
     </div>
   </div>
 </template>
@@ -66,12 +87,27 @@ const timeLeft = ref(0);
 const isMyTurn = ref(false);
 let timerInterval: number | null = null;
 
+const promptOptions = ref<string[]>([]);
+const promptCard = ref('');
+const promptVisible = ref(false);
+const selfOptions = ref<{type: string, card: string}[]>([]); // For An Gang / Jia Gang
+
+const { connect, on, off, socketId, send } = useSocket();
+
+const selectClaimAction = (action: string) => {
+  promptVisible.value = false;
+  socketId.value && send("claimAction", { action });
+};
+
+const selectSelfAction = (type: string, card: string) => {
+  selfOptions.value = [];
+  socketId.value && send("selfAction", { action: type, card });
+};
+
 // Ensures cleanup
 onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval);
 });
-
-const { connect, on, off, socketId, send } = useSocket();
 
 const joinRoom = (roomId: string, userId: string) => {
   console.log("joinRoom", roomId, userId);
@@ -111,6 +147,8 @@ onMounted(async () => {
       // 开始牌局：交给 Pixi 渲染
       // gameStore.hands = hands;
       // gameStore.banker = banker;
+      promptVisible.value = false;
+      selfOptions.value = [];
       // 修复：根据bankerIndex获取对应的userId，而不是直接使用索引
       const userIds = Object.keys(hands);
       const bankerUserId = userIds[bankerIndex];
@@ -129,7 +167,7 @@ onMounted(async () => {
       isMyTurn.value = turn === gameStore.myId;
       timeLeft.value = timeLimit;
       countdownVisible.value = true;
-
+      console.log("开始计时-----");
       if (timerInterval) clearInterval(timerInterval);
       timerInterval = window.setInterval(() => {
         timeLeft.value -= 1;
@@ -175,6 +213,20 @@ onMounted(async () => {
         "剩余牌墙",
         wallLeft,
       );
+
+      if (userId === gameStore.myId) {
+        const myHand = gameStore.hands[userId];
+        const options: {type: string, card: string}[] = [];
+
+        // Check An Gang
+        const counts: Record<string, number> = {};
+        myHand.forEach((c: string) => counts[c] = (counts[c] || 0) + 1);
+        for (const [c, count] of Object.entries(counts)) {
+          if (count === 4) options.push({ type: 'an_gang', card: c });
+        }
+
+        selfOptions.value = options;
+      }
     });
 
     on("gameOver", ({ winner }) => {
@@ -186,6 +238,34 @@ onMounted(async () => {
       tableScene.hideTurnIndicator();
       // 可以在这里添加其他游戏结束的逻辑
     });
+
+    on("actionPrompt", ({ card, options, timeLimit }) => {
+      promptCard.value = card;
+      promptOptions.value = options;
+      promptVisible.value = true;
+      // Re-use countdown block for the 8s prompt visually
+      timeLeft.value = timeLimit;
+      countdownVisible.value = true;
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = window.setInterval(() => {
+        timeLeft.value -= 1;
+        if (timeLeft.value <= 0) {
+          clearInterval(timerInterval!);
+          promptVisible.value = false;
+        }
+      }, 1000);
+    });
+
+    on("peng", ({ userId, card }) => {
+       console.log("Player Peng:", userId, card);
+       promptVisible.value = false;
+    });
+
+    on("gang", ({ userId, card }) => {
+       console.log("Player Gang:", userId, card);
+       promptVisible.value = false;
+    });
+
   }
 });
 </script>
