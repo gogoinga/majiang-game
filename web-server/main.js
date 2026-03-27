@@ -57,6 +57,36 @@ function autoPlay(roomId) {
   handlePlayCard(roomId, userId, card);
 }
 
+function proceedToNextTurn(roomId, fromUserId) {
+  const room = rooms.get(roomId);
+  const state = roomState.get(roomId);
+  if (!room || !state) return;
+
+  const uids = [...room.players.values()];
+  const nextIdx = (uids.indexOf(fromUserId) + 1) % 4;
+  const nextUser = uids[nextIdx];
+
+  if (state.wall.length === 0) {
+    io.to(roomId).emit("gameOver", { winner: null, nextBanker: state.banker });
+    room.ready.clear();
+    return;
+  }
+
+  const drawnTile = state.wall.pop();
+  state.hands[nextUser].push(drawnTile);
+  state.turn = nextUser;
+
+  const handsSnapshot = JSON.parse(JSON.stringify(state.hands));
+  io.to(roomId).emit("draw", {
+    userId: nextUser,
+    tile: drawnTile,
+    wallLeft: state.wall.length,
+    hands: handsSnapshot,
+  });
+
+  startTimer(roomId);
+}
+
 function handlePlayCard(roomId, userId, card) {
   const room = rooms.get(roomId);
   const state = roomState.get(roomId);
@@ -80,45 +110,48 @@ function handlePlayCard(roomId, userId, card) {
     return;
   }
 
-  // 3. 下家摸牌
+  // 3. 检查其他人是否有碰/明杠
+  const options = {};
   const uids = [...room.players.values()];
-  const nextIdx = (uids.indexOf(userId) + 1) % 4;
-  const nextUser = uids[nextIdx];
-
-  // 4. 牌墙空 → 流局（可换规则）
-  if (state.wall.length === 0) {
-    io.to(roomId).emit("gameOver", {
-      winner: null,
-      nextBanker: state.banker,
-    }); // 流局
-    room.ready.clear(); // 游戏结束，清空准备状态
-    return;
+  for (const uid of uids) {
+    if (uid === userId) continue;
+    const count = state.hands[uid].filter(c => c === card).length;
+    const userOptions = [];
+    if (count >= 2) userOptions.push('peng');
+    if (count === 3) userOptions.push('gang');
+    if (userOptions.length > 0) options[uid] = userOptions;
   }
 
-  // 5. 给下家发 1 张
-  const drawnTile = state.wall.pop();
-  state.hands[nextUser].push(drawnTile);
-
-  // 6. 转回合
-  state.turn = nextUser;
-
-  // 7. 广播：出牌 + 摸牌 + 新回合（附带完整 hands 作为权威数据源，避免前后端不同步）
   const handsSnapshot = JSON.parse(JSON.stringify(state.hands));
   io.to(roomId).emit("played", {
-    userId,
-    card,
-    nextTurn: nextUser,
-    hands: handsSnapshot,
-  });
-  io.to(roomId).emit("draw", {
-    userId: nextUser,
-    tile: drawnTile,
-    wallLeft: state.wall.length,
-    hands: handsSnapshot,
+    userId, card, hands: handsSnapshot,
+    nextTurn: null // null indicates waiting for actions
   });
 
-  // ========== 增加这一行，开启下家的倒计时 ==========
-  startTimer(roomId);
+  if (Object.keys(options).length > 0) {
+    // 等待截牌
+    state.actionPending = { card, fromUserId: userId, options, timerId: null };
+
+    // 通知相关玩家
+    for (const [uid, ops] of Object.entries(options)) {
+      const socketId = [...room.players.entries()].find(([sid, id]) => id === uid)?.[0];
+      if (socketId) {
+        io.to(socketId).emit("actionPrompt", { card, options: ops, timeLimit: 8 });
+      }
+    }
+
+    // 设置8秒等待自动过
+    state.actionPending.timerId = setTimeout(() => {
+      if (state.actionPending) {
+        const fromUser = state.actionPending.fromUserId;
+        state.actionPending = null;
+        proceedToNextTurn(roomId, fromUser);
+      }
+    }, 8000);
+  } else {
+    // 没人能碰/杠，直接进入下家回合
+    proceedToNextTurn(roomId, userId);
+  }
 }
 
 io.on("connection", (socket) => {
@@ -132,11 +165,14 @@ io.on("connection", (socket) => {
     if (!roomState.has(roomId)) {
       roomState.set(roomId, {
         hands: {}, // userId -> string[]
+        pengs: {}, // userId -> string[][]
+        gangs: {}, // userId -> { type: string, card: string }[]
         river: {}, // userId -> string[]
         turn: null, // 当前出牌人 userId
         banker: null, // 当前庄家 userId
-        wall: [], // 牌墙（剩余牌）
-        timerId: null, // 定时器 ID
+        wall: [], // 牌墙
+        timerId: null,
+        actionPending: null // { card, fromUserId, options: { userId: ['peng','gang'] }, timerId }
       });
     }
     const room = rooms.get(roomId);
@@ -193,6 +229,9 @@ io.on("connection", (socket) => {
       state.river = Object.fromEntries(
         [...room.players.values()].map((uid) => [uid, []])
       );
+      state.pengs = Object.fromEntries([...room.players.values()].map((uid) => [uid, []]));
+      state.gangs = Object.fromEntries([...room.players.values()].map((uid) => [uid, []]));
+      state.actionPending = null;
 
       state.turn = banker;
       state.banker = banker; // 设置当前庄家
@@ -204,6 +243,8 @@ io.on("connection", (socket) => {
         seats,
         playerSeats, // 新增：玩家座位映射
         river: state.river,
+        pengs: state.pengs,
+        gangs: state.gangs,
         bankerIndex,
         wallCount: wall.length,
       });
