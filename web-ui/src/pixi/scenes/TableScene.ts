@@ -18,8 +18,6 @@ export class TableScene extends PIXI.Container {
 
   // 当前出牌玩家的标记
   private turnIndicator: PIXI.Graphics | null = null;
-  private countdownTimer: ReturnType<typeof setInterval> | null = null;
-  private countdownValue: number = 15;
 
   private otherHandContainers: Record<string, PIXI.Container> = {};
 
