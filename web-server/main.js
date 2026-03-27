@@ -50,10 +50,9 @@ function autoPlay(roomId) {
   const hand = state.hands[userId];
   if (!hand || hand.length === 0) return;
   
-  // 自动打出一张随机牌
-  const randomIndex = Math.floor(Math.random() * hand.length);
-  const card = hand[randomIndex];
-  console.log(`[AutoPlay] ${userId} 自动打出随机牌 ${card}`);
+  // 自动打出最后一张牌（刚摸的牌或最右边的牌）
+  const card = hand[hand.length - 1];
+  console.log(`[AutoPlay] ${userId} 自动打出最后一张牌 ${card}`);
   
   handlePlayCard(roomId, userId, card);
 }
@@ -118,7 +117,7 @@ function handlePlayCard(roomId, userId, card) {
     hands: handsSnapshot,
   });
 
-  // 8. 给下家开启新的倒计时
+  // ========== 增加这一行，开启下家的倒计时 ==========
   startTimer(roomId);
 }
 
