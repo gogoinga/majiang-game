@@ -31,7 +31,9 @@ function shuffle(deck) {
 // 发 3 家 13 张，让庄家多 1 张，牌墙为发牌后剩余的牌
 export function dealHands(room, previousBanker = null) {
   const deck = shuffle(createDeck()); // 108 张
-  const userIds = [...room.players.values()]; // 顺序固定
+  const userIds = room.playerOrder?.length
+    ? [...room.playerOrder]
+    : [...room.players.values()]; // 顺序固定
 
   // 如果有上一局的庄家，则将其移到第一个位置作为新庄家
   if (previousBanker && userIds.includes(previousBanker)) {

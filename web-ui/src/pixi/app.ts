@@ -12,6 +12,7 @@ export async function createApp(container: HTMLElement) {
     backgroundColor: 0x006400,
     resolution: window.devicePixelRatio || 1,
     autoDensity: true,
+    resizeTo: container,
   });
   await loadAllTiles();
   // 3. 把 canvas 放进 DOM

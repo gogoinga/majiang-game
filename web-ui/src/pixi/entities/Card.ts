@@ -25,6 +25,7 @@ export class Card extends PIXI.Sprite {
     // super(PIXI.Texture.from(getTexture(value))); // 先都用 1 万占位
     this.value = value;
     this.anchor.set(0.5);
+    this.eventMode = "static";
     this.interactive = true;
     this.buttonMode = true;
     this.baseY = this.y;
@@ -32,10 +33,13 @@ export class Card extends PIXI.Sprite {
     this.riverY = this.y;
     this.width = CARD_WIDTH;
     this.height = CARD_HEIGHT;
-    this.on("click", () => this.select());
     // this.on("click", () => this.deselect());
     console.log("Card", value, this.x, this.y, this.parent);
     // this.on("pointerdown", () => this.emit("clicked", this));
+  }
+
+  isSelected() {
+    return this.selected;
   }
 
   select() {
@@ -58,7 +62,7 @@ export class Card extends PIXI.Sprite {
 
     Card.curSelected = this;
     gsap.to(this, {
-      y: this.y - CARD_HEIGHT / 2,
+      y: this.y - this.height / 2,
 
       duration: 0.15,
     });

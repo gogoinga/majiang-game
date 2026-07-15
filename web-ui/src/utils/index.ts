@@ -12,3 +12,23 @@ for (let n = 1; n <= 9; n++) tileOrder[n + "s"] = n + 9;
 export function sortTiles(hand: string[]): string[] {
   return hand.sort((a, b) => tileOrder[a] - tileOrder[b]);
 }
+
+const tileAssetAliases: Record<string, string> = {
+  中: "中变",
+};
+
+export function resolveTileAssetName(tile: string): string {
+  return tileAssetAliases[tile] || tile;
+}
+
+export function getPublicTileUrl(tile: string): string {
+  return `${import.meta.env.BASE_URL}tiles/${resolveTileAssetName(tile)}.png`;
+}
+
+export function getPublicTileAtlasImageUrl(): string {
+  return `${import.meta.env.BASE_URL}tiles/tiles-atlas.png`;
+}
+
+export function getPublicTileAtlasMetaUrl(): string {
+  return `${import.meta.env.BASE_URL}tiles/tiles-atlas.json`;
+}
